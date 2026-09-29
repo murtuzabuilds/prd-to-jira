@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PRD to Jira · preview</title>
+<meta name="description" content="Paste a PRD and see the Jira epics and stories it becomes, with a scope check.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#F7F8F9;--card:#fff;--line:#DFE1E6;--ink:#172B4D;--ink2:#44546F;--ink3:#626F86;--blue:#0C66E4;--purple:#6E5DC6;--green:#22A06B;--amber:#E2B203;--red:#C9372C}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 Inter,system-ui,sans-serif}
+header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 24px;border-bottom:1px solid var(--line);background:var(--card)}
+header h1{margin:0;font-size:16px;font-weight:600;display:flex;gap:10px;align-items:center}header h1 span{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--ink3);font-weight:400}
+header a{color:var(--blue);text-decoration:none;font-size:13px}
+main{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:0;min-height:calc(100vh - 57px)}
+.left{border-right:1px solid var(--line);display:flex;flex-direction:column}
+.bar{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);font-size:12px;color:var(--ink3);background:var(--card)}
+.bar button{border:1px solid var(--line);background:var(--card);border-radius:4px;padding:4px 10px;font:inherit;cursor:pointer;color:var(--ink2)}
+textarea{flex:1;border:0;resize:none;padding:16px;font:13px/1.6 "JetBrains Mono",monospace;color:var(--ink);background:#FBFBFC;outline:none;min-height:420px}
+.right{padding:18px 20px;overflow:auto}
+.stats{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}.stats span{background:var(--card);border:1px solid var(--line);border-radius:4px;padding:6px 10px;font-size:12px;color:var(--ink2)}.stats b{color:var(--ink)}
+.epic{background:var(--card);border:1px solid var(--line);border-radius:6px;margin-bottom:12px;overflow:hidden}
+.eh{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);background:#F3F0FF}
+.badge{font-family:"JetBrains Mono",monospace;font-size:10.5px;padding:2px 6px;border-radius:3px;color:#fff;background:var(--purple)}
+.eh b{font-weight:600}.eh small{margin-left:auto;color:var(--ink3)}
+.story{padding:10px 14px;border-top:1px solid #F1F2F4;display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:start}
+.story:first-of-type{border-top:0}
+.story .ic{width:16px;height:16px;border-radius:3px;background:var(--green);margin-top:2px}
+.story ul{margin:6px 0 0;padding-left:18px;color:var(--ink2);font-size:12.5px}
+.pri{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--ink3);white-space:nowrap}
+.pri i{display:inline-block;padding:1px 6px;border-radius:10px;background:#E9F2FF;color:var(--blue);font-style:normal;margin-left:6px}
+.lab{display:inline-block;font-size:11px;background:#F1F2F4;border-radius:3px;padding:0 5px;margin-left:6px;color:var(--ink2)}
+.warn{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:6px;padding:12px 14px;margin-top:6px}
+.warn h3{margin:0 0 6px;font-size:13px}.warn li{margin:3px 0;color:var(--ink2);font-size:13px}.warn li.lv-error{color:var(--red)}.warn li.lv-info{color:var(--ink3)}
+.json{margin-top:14px}.json summary{cursor:pointer;color:var(--ink3);font-size:12px}.json pre{background:#0D1117;color:#C9D1D9;padding:12px;border-radius:6px;overflow:auto;font-size:11.5px;max-height:320px}
+@media(max-width:860px){main{grid-template-columns:1fr}.left{border-right:0;border-bottom:1px solid var(--line)}textarea{min-height:300px}}
+</style>
+</head>
+<body>
+<header><h1>PRD → Jira <span>preview · nothing leaves your browser</span></h1><a href="https://github.com/murtuzabuilds/prd-to-jira">View on GitHub</a></header>
+<main>
+  <section class="left"><div class="bar"><span>PRD (markdown)</span><button id="sample" type="button">Load sample</button></div><textarea id="md" spellcheck="false" aria-label="PRD markdown"></textarea></section>
+  <section class="right"><div class="stats" id="stats"></div><div id="epics"></div><div id="warn"></div>
+    <details class="json"><summary>Jira payloads (what the CLI and n8n send)</summary><pre id="json"></pre></details></section>
+</main>
+<script type="module">
+import { parsePRD, summary } from './src/parse.js';
+import { payloads } from './src/jira.js';
+const $ = id => document.getElementById(id), esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+async function sample() { $('md').value = await (await fetch('examples/checkout-redesign.md')).text(); render(); }
+function render() {
+  const p = parsePRD($('md').value), s = summary(p);
+  $('stats').innerHTML = `<span><b>${s.epics}</b> epics</span><span><b>${s.stories}</b> stories</span><span><b>${s.points}</b> points</span><span><b>${s.withAC}/${s.stories}</b> with acceptance criteria</span>`;
+  let k = 0;
+  $('epics').innerHTML = p.epics.map((e, i) => { const ek = `PRD-${++k}`; return `<div class="epic"><div class="eh"><span class="badge">EPIC ${ek}</span><b>${esc(e.title)}</b><small>${e.stories.length} stories</small></div>${e.stories.map(st => `<div class="story"><span class="ic"></span><div><span>${esc(st.title)}</span>${st.labels.map(l => `<span class="lab">${esc(l)}</span>`).join('')}${st.ac.length ? `<ul>${st.ac.map(a => `<li>${esc(a)}</li>`).join('')}</ul>` : ''}</div><span class="pri">PRD-${++k}<i>${st.priority}${st.points ? ' · ' + st.points : ''}</i></span></div>`).join('')}</div>`; }).join('') || '<p style="color:var(--ink3)">Add ## headings for feature areas and - bullets for stories.</p>';
+  $('warn').innerHTML = p.warnings.length ? `<div class="warn"><h3>Scope check · ${p.warnings.length}</h3><ul>${p.warnings.map(w => `<li class="lv-${w.level}">${esc(w.msg)}</li>`).join('')}</ul></div>` : '';
+  $('json').textContent = JSON.stringify(payloads(p, 'PRD'), null, 2).slice(0, 8000);
+}
+$('md').addEventListener('input', render); $('sample').addEventListener('click', sample); sample();
+</script>
+</body>
+</html>
