@@ -1,0 +1,220 @@
+{
+  "name": "PRD to Jira",
+  "nodes": [
+    {
+      "id": "n1",
+      "name": "PRD in",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "prd-to-jira",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "n2",
+      "name": "Parse PRD",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// PRD markdown → a scoped Jira plan: epics, stories, points, priority, acceptance criteria.\n// Pure function, no dependencies: the same file runs in Node, the browser and an n8n Code node.\n\nconst META = /^(problem|background|context|goals?|objectives?|success metrics?|metrics|kpis?|non-goals|out of scope|risks?( and open questions)?|open questions|users?|personas?|timeline|appendix|overview|summary)$/i;\nconst VAGUE = ['fast', 'easy', 'intuitive', 'seamless', 'simple', 'user-friendly', 'robust', 'better', 'improve', 'optimize', 'etc'];\n\nfunction parsePRD(md) {\n  const lines = String(md).replace(/\\r/g, '').split('\\n');\n  const plan = { title: '', meta: {}, epics: [], warnings: [] };\n  let section = null, epic = null, story = null, metaKey = null;\n\n  for (const raw of lines) {\n    const line = raw.replace(/\\s+$/, '');\n    let m;\n    if ((m = line.match(/^#\\s+(.+)/)) && !plan.title) { plan.title = m[1].trim(); continue; }\n    if ((m = line.match(/^(#{2,3})\\s+(.+)/))) {\n      const name = m[2].trim().replace(/^(epic|feature)\\s*[:\\-]\\s*/i, '');\n      story = null;\n      if (META.test(name)) { metaKey = key(name); plan.meta[metaKey] = ''; epic = null; continue; }\n      if (m[1] === '##' && /^(requirements|features|scope|user stories|epics)$/i.test(name)) { metaKey = null; section = 'req'; epic = null; continue; }\n      metaKey = null;\n      epic = { title: name, summary: '', stories: [] };\n      plan.epics.push(epic);\n      continue;\n    }\n    if (metaKey) { plan.meta[metaKey] += (plan.meta[metaKey] ? '\\n' : '') + line.trim(); continue; }\n    if (!epic) continue;\n\n    if ((m = line.match(/^(\\s*)[-*]\\s+(.+)/))) {\n      const depth = m[1].length, text = m[2].trim();\n      if (depth === 0) {\n        story = toStory(text);\n        epic.stories.push(story);\n      } else if (story) {\n        story.ac.push(text.replace(/^(ac|given)\\s*[:\\-]?\\s*/i, (s) => (/^given/i.test(s) ? s : '')));\n      }\n      continue;\n    }\n    if ((m = line.match(/^\\s*(?:ac|acceptance criteria)\\s*:\\s*(.+)/i)) && story) { story.ac.push(m[1].trim()); continue; }\n    if (line.trim() && !story) epic.summary += (epic.summary ? ' ' : '') + line.trim();\n  }\n  for (const k of Object.keys(plan.meta)) plan.meta[k] = plan.meta[k].trim();\n  plan.warnings = lint(plan);\n  return plan;\n}\n\nfunction toStory(text) {\n  let points = null, priority = null, labels = [];\n  text = text.replace(/\\((\\d+)\\s*(?:pts?|points?|sp)\\)/i, (_, n) => { points = +n; return ''; });\n  text = text.replace(/\\[(P[0-3])\\]/i, (_, p) => { priority = p.toUpperCase(); return ''; });\n  text = text.replace(/#([a-z][\\w-]*)/gi, (_, l) => { labels.push(l.toLowerCase()); return ''; });\n  return { title: text.replace(/\\s{2,}/g, ' ').trim(), points, priority: priority || 'P2', labels, ac: [] };\n}\n\nfunction lint(plan) {\n  const w = [];\n  if (!plan.title) w.push({ level: 'error', msg: 'PRD has no # title' });\n  if (!plan.epics.length) w.push({ level: 'error', msg: 'No epics found. Use ## headings for each feature area.' });\n  if (!plan.meta.goals && !plan.meta.goal) w.push({ level: 'warn', msg: 'No Goals section, so tickets will not trace back to an outcome' });\n  const metrics = plan.meta['success-metrics'] || plan.meta.metrics || plan.meta.kpis || '';\n  if (!/\\d/.test(metrics)) w.push({ level: 'warn', msg: 'Success metrics have no target number' });\n  for (const e of plan.epics) {\n    if (!e.stories.length) w.push({ level: 'warn', msg: `Epic \"${e.title}\" has no stories` });\n    for (const s of e.stories) {\n      const where = `\"${s.title}\"`;\n      if (!s.ac.length) w.push({ level: 'warn', msg: `${where} has no acceptance criteria` });\n      if (s.points && s.points > 8) w.push({ level: 'warn', msg: `${where} is ${s.points} points: split it before the sprint` });\n      if (s.points === null) w.push({ level: 'info', msg: `${where} is unestimated` });\n      const vague = VAGUE.filter(v => new RegExp(`\\\\b${v}\\\\b`, 'i').test(s.title));\n      if (vague.length) w.push({ level: 'warn', msg: `${where} uses vague wording (${vague.join(', ')}): say what done looks like` });\n    }\n  }\n  return w;\n}\n\nfunction summary(plan) {\n  const stories = plan.epics.flatMap(e => e.stories);\n  return {\n    epics: plan.epics.length,\n    stories: stories.length,\n    points: stories.reduce((a, s) => a + (s.points || 0), 0),\n    unestimated: stories.filter(s => s.points === null).length,\n    withAC: stories.filter(s => s.ac.length).length,\n  };\n}\n\nconst key = s => s.toLowerCase().replace(/[^a-z]+/g, '-').replace(/^-|-$/g, '');\n\n// ---- n8n entry ----\nconst body = $input.first().json.body || $input.first().json;\nconst plan = parsePRD(body.prd || '');\nconst errors = plan.warnings.filter(w => w.level === 'error');\nif (errors.length) throw new Error(errors.map(e => e.msg).join('; '));\nconst PRIORITY = { P0: 'Highest', P1: 'High', P2: 'Medium', P3: 'Low' };\nreturn plan.epics.map(e => ({ json: {\n  project: body.project, prdTitle: plan.title, epic: e.title, epicSummary: e.summary,\n  stories: e.stories.map(s => ({ ...s, jiraPriority: PRIORITY[s.priority] || 'Medium' })),\n  warnings: plan.warnings.map(w => w.msg),\n} }));"
+      }
+    },
+    {
+      "id": "n3",
+      "name": "Create epic",
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "jiraVersion": "cloud",
+        "project": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.project }}"
+        },
+        "issueType": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Epic"
+        },
+        "summary": "={{ $json.epic }}",
+        "additionalFields": {
+          "description": "={{ $json.epicSummary }}\n\nFrom PRD: {{ $json.prdTitle }}",
+          "labels": [
+            "prd-to-jira"
+          ]
+        }
+      },
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "REPLACE_ME",
+          "name": "Jira Cloud"
+        }
+      }
+    },
+    {
+      "id": "n4",
+      "name": "Expand stories",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// One item per story, carrying the key of the epic Jira just created\nconst out = [];\nfor (const item of $input.all()) {\n  const epicKey = item.json.key;\n  const src = $('Parse PRD').all()[$input.all().indexOf(item)].json;\n  for (const s of src.stories) out.push({ json: { project: src.project, epicKey, epic: src.epic, ...s,\n    description: 'Part of epic: ' + src.epic + (s.ac.length ? '\\n\\nAcceptance criteria:\\n- ' + s.ac.join('\\n- ') : '') } });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "n5",
+      "name": "Create story",
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        960,
+        0
+      ],
+      "parameters": {
+        "jiraVersion": "cloud",
+        "project": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.project }}"
+        },
+        "issueType": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Story"
+        },
+        "summary": "={{ $json.title }}",
+        "additionalFields": {
+          "description": "={{ $json.description }}",
+          "labels": "={{ [\"prd-to-jira\", ...$json.labels] }}",
+          "priority": "={{ $json.jiraPriority }}",
+          "parentIssueKey": "={{ $json.epicKey }}"
+        }
+      },
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "REPLACE_ME",
+          "name": "Jira Cloud"
+        }
+      }
+    },
+    {
+      "id": "n6",
+      "name": "Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const created = $input.all().map(i => i.json.key);\nconst warnings = $('Parse PRD').first().json.warnings;\nreturn [{ json: { ok: true, storiesCreated: created.length, stories: created, scopeWarnings: warnings } }];"
+      }
+    },
+    {
+      "id": "n7",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1440,
+        0
+      ],
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "PRD in": {
+      "main": [
+        [
+          {
+            "node": "Parse PRD",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse PRD": {
+      "main": [
+        [
+          {
+            "node": "Create epic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create epic": {
+      "main": [
+        [
+          {
+            "node": "Expand stories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expand stories": {
+      "main": [
+        [
+          {
+            "node": "Create story",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create story": {
+      "main": [
+        [
+          {
+            "node": "Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summary": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
