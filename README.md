@@ -24,7 +24,7 @@ Turning a requirements doc into Jira work is slow, manual and lossy. Acceptance 
   - Failed wallet payment falls back to the card form
 ```
 
-`[P0]`–`[P3]` sets priority (mapped to Highest…Low), `(5 pts)` sets the estimate, `#label` adds labels.
+`[P0]` to `[P3]` sets priority (mapped to Highest to Low), `(5 pts)` sets the estimate, `#label` adds labels.
 
 ## Scope check
 
