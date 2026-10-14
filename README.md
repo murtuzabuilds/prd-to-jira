@@ -2,7 +2,7 @@
 
 **Turn a PRD into scoped Jira epics and stories, with a scope check before anything reaches the backlog.** One parser, three ways to run it: a CLI, an importable n8n workflow, and a browser preview.
 
-**[Try the preview →](https://murtuzabuilds.github.io/prd-to-jira/)** &nbsp;·&nbsp; paste any PRD, see the tickets it becomes
+**[Try the preview →](https://murtuzabuilds.com/prd-to-jira/)** &nbsp;·&nbsp; paste any PRD, see the tickets it becomes
 
 ![PRD to Jira preview](docs/preview.png)
 
